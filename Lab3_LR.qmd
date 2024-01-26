@@ -1,0 +1,235 @@
+---
+title: "Lab3"
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+    embed-resources: true
+execute: 
+  echo: true
+  warning: false
+  message: false
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(tsibble)
+library(feasts)
+library(fable)
+library(here)
+library(janitor)
+
+# spatial packages
+#install.packages('sf')
+library(sf)
+library(tmap)
+```
+```{r}
+#county data
+ca_counties_raw_sf <- read_sf(here("data", "ca_counties", "CA_Counties_TIGER2016.shp"))
+#read_sf reads in spatial features
+#need to be in same folder with same name
+
+#View(ca_counties_raw_sf)
+# geometry = boundary info, rest of data is about boundary data
+```
+
+```{r}
+ca_counties_sf <- ca_counties_raw_sf %>% 
+  janitor::clean_names() %>% 
+  mutate(land_km2 = aland / 1e6) %>% 
+  select(county = name, land_km2)
+  
+#View(ca_counties_sf)
+#knows sf, simple object, don't want to forget geometry column, it stays there
+
+#if want to get rid of geometry, make a regular dataframe
+#ca_counteis_df <- ca_counties_sf %>% 
+ # as.data.frame() %>% 
+#  select(-geometry)
+```
+
+```{r}
+# check the CRS
+ca_counties_sf %>%  
+  st_crs() #take simple featuers obj and run CRS
+
+# WGS 84, Pseudo Mercator, ID EPSG 3857
+```
+```{r}
+plot(ca_counties_sf %>% 
+  select(land_km2))
+# a graph!
+# grab 1 variable, shorter time
+```
+```{r}
+ggplot() +
+  geom_sf(data = ca_counties_sf, aes(fill = land_km2), color = 'white', size = 0.1) +
+  theme_void() + #gets rid of background color, lat/long
+  scale_fill_gradientn(colors = c('cyan', 'blue', 'purple'))
+
+# geom_sf knows sf, x/y = lat/long
+```
+```{r}
+# read in sesbania records
+sesbania_sf <- read_sf(here('data/red_sesbania/ds80_for_lab.gpkg')) %>% 
+  janitor::clean_names()
+#ds80, geopkge is smaller sizes
+
+sesbania_sf %>%  st_crs()
+
+View(sesbania_sf)
+# NAD 1983, want to transform to CRS of counties file (ID = 3857)
+
+plot(sesbania_sf %>%  select(id))
+```
+```{r}
+# analysis: count of red ses observed locations in this dataset, by county, create map of all CA counties using fill color to indicate sesbania counts
+```
+
+Pseudocode
+1. count number of observations per location
+2. relate watershed (nope - point location) to county geometry
+3. fill = number of observations
+
+Group Code
+1. full join
+2. get the counties and sesbania in same CRS
+3. get county boundary coordinates to match up with coorinates of sesbania
+4. plot datasets together
+5. spatial join - matches datasets
+
+```{r}
+# 1. transforms CRS so records match counties
+
+sesbania_3857_sf <- st_transform(sesbania_sf, 3857) 
+#transforms CRS of sf
+# need to check CRS for both
+
+# if don't know
+#sesbania_3857_2_sf <- st_transform(sesbania_sf, st_crs(ca_counties_sf))
+#st_crs(sesbania_3857_2_sf)
+
+#check
+st_crs(sesbania_3857_sf)
+```
+```{r}
+# plot 2 together
+ggplot() +
+  geom_sf(data = ca_counties_sf) +
+  geom_sf(data = sesbania_3857_sf, size = 1, color = 'red')
+#knows where pts are related to boundaries
+```
+
+```{r}
+#spatial join pts to polygon
+ca_sesb_sf <- st_join(ca_counties_sf, sesbania_3857_sf)
+# 134 obs
+
+View(ca_sesb_sf)
+# geometry = multipolygons -> lumped points under polygon, lost pt data
+```
+
+```{r}
+# other way: join county records to pts
+ses_ca_sf <- st_join(sesbania_3857_sf, ca_counties_sf)
+#91 obs
+# keeps geometies of 1st input
+# kept pts and added counties that line up w points
+```
+
+```{r}
+#summarize by county
+sesb_counts_sf <- ca_sesb_sf %>% 
+  group_by(county) %>% 
+  summarize(n_records = sum(!is.na(id)))
+
+# drop N/As 
+```
+
+```{r}
+# plot a Choropleth (regular math)
+
+ggplot() + 
+  geom_sf(data = sesb_counts_sf, aes(fill = n_records), color = 'grey90', size = 1) + # size = border
+  scale_fill_gradientn(colors = c('lightgrey', 'lightpink', 'purple')) +
+  theme_minimal() +
+  labs(fill = 'Number of S. punicea records')
+```
+
+## Next analysis:
+
+For the county with the greatest number of red ses records, map those locations and where they occur within the county
+
+### Pseudocode
+
+county = salano (filter?), or manual - isolate highest nrecords
+ca_ses_sf
+ggplot ses_3857 and counties, plot ses points where county = salano
+
+## Group Code
+
+Which county has most records or filter just by that county
+subset of other lcoation info
+spatial join - ses_ca_counts
+
+```{r}
+county_max <- sesb_counts_sf %>% 
+  filter(n_records == max(n_records)) %>% 
+  pull(county)
+
+county_max
+#solano
+
+solano_sesb_sf <- ses_ca_sf %>% 
+  filter(county == county_max) 
+
+solano_sf <- ca_counties_sf %>% 
+  filter(county %in%  county_max)
+
+ggplot() +
+  geom_sf(data = solano_sf) +
+  geom_sf(data = solano_sesb_sf, color = 'red')
+```
+```{r}
+#| eval: false
+#| include: true
+
+# tmap: interactive map
+# don't want this included in html (large file size)
+
+# set viewing mode to interactive
+tmap_mode(mode = 'view')
+
+tm_shape(ca_counties_sf) +
+  tm_fill("land_km2", palette = 'BuGn') +  #fades blue to green
+  tm_shape(sesbania_sf) + #tmap transforms CRS itself
+  tm_dots()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
